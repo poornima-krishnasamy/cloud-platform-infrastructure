@@ -37,7 +37,7 @@ def main(options)
   execute "git-crypt unlock" if gitcrypt_unlock
 
   create_vpc(vpc_name)
-  if kind == "eks"
+  if kind == "eks" || kind == "EKS"
     create_cluster_eks(cluster_name, vpc_name)
     sleep(extra_wait)
     install_components_eks(cluster_name)
@@ -53,8 +53,8 @@ def main(options)
 end
 
 def create_vpc(vpc_name)
-  FileUtils.rm_rf("terraform/cloud-platform-network/.terraform")
-  dir = "terraform/cloud-platform-network"
+  FileUtils.rm_rf("terraform/aws-accounts/cloud-platform-aws/vpc/.terraform")
+  dir = "terraform/aws-accounts/cloud-platform-aws/vpc"
   switch_terraform_workspace(dir, vpc_name)
 
   tf_apply = [
@@ -66,8 +66,8 @@ def create_vpc(vpc_name)
 end
 
 def create_cluster_kops(cluster_name, vpc_name)
-  FileUtils.rm_rf("terraform/cloud-platform/.terraform")
-  dir = "terraform/cloud-platform"
+  FileUtils.rm_rf("terraform/aws-accounts/cloud-platform-aws/vpc/kops/.terraform")
+  dir = "terraform/aws-accounts/cloud-platform-aws/vpc/kops"
   switch_terraform_workspace(dir, cluster_name)
 
   tf_apply = [
@@ -80,8 +80,8 @@ def create_cluster_kops(cluster_name, vpc_name)
 end
 
 def create_cluster_eks(cluster_name, vpc_name)
-  FileUtils.rm_rf("terraform/cloud-platform-eks/.terraform")
-  dir = "terraform/cloud-platform-eks"
+  FileUtils.rm_rf("terraform/aws-accounts/cloud-platform-aws/vpc/eks/.terraform")
+  dir = "terraform/aws-accounts/cloud-platform-aws/vpc/eks"
   switch_terraform_workspace(dir, cluster_name)
 
   tf_apply = [
@@ -123,7 +123,7 @@ end
 # This seems to be quite misleading, since adding a delay after 'helm repo update' makes no difference.
 # A second run of the terraform apply usually works correctly.
 def install_components_kops(cluster_name)
-  dir = "terraform/cloud-platform-components"
+  dir = "terraform/aws-accounts/cloud-platform-aws/vpc/kops/components"
   execute "cd #{dir}; rm -rf .terraform"
   switch_terraform_workspace(dir, cluster_name)
   disable_alerts(dir)
@@ -144,8 +144,34 @@ def install_components_kops(cluster_name)
   end
 end
 
+# This is a tactical fix to install our own pod security policies in an EKS cluster. When PSP's are deprecated and we create policies via another means, this method can be removed.
+def fix_psp(dir)
+  cmd_delete = "kubectl delete psp eks.privileged"
+  if cmd_successful?(cmd_delete)
+    log "Deleted eks.privileged psp."
+  else
+    log "Could not delete eks.privileged psp. Aborting."
+    exit 1
+  end
+
+  cmd_apply = "kubectl apply -f #{dir}/resources/psp/pod-security-policy.yaml"
+  if cmd_successful?(cmd_apply)
+    log "Applied new psp's."
+  else
+    log "Could not apply psp's. Aborting."
+    exit 1
+  end
+
+  cmd_destroy = "kubectl delete --all pods -A"
+  if cmd_successful?(cmd_destroy)
+    log "Recycled all pods."
+  else
+    log "Failed to recycle pods. Continuing."
+  end
+end
+
 def install_components_eks(cluster_name)
-  dir = "terraform/cloud-platform-eks/components"
+  dir = "terraform/aws-accounts/cloud-platform-aws/vpc/eks/components"
   execute "cd #{dir}; rm -rf .terraform"
   switch_terraform_workspace(dir, cluster_name)
   disable_alerts(dir)
@@ -157,6 +183,8 @@ def install_components_eks(cluster_name)
     log "Could not set kubeconfig to the new cluster. Aborting."
     exit 1
   end
+
+  fix_psp(dir)
 
   cmd = "cd #{dir}; terraform apply -auto-approve"
   if cmd_successful?(cmd)
